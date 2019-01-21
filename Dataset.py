@@ -28,8 +28,9 @@ class Dataset():
         return (self.prepro_data_for_batch([self.data[idx] for idx in batch_idx]) for batch_idx in self.batch_idxs)
 
     def prepro_data_for_batch(self, data):
-        cur_max_len = max([len(d) for d in data])
-        if cur_max_len - 1  > self.max_len:
+        seq_lens = [self.max_len if len(d) - 1 > self.max_len else len(d) - 1 for d in data]
+        cur_max_len = max(seq_lens)
+        if cur_max_len > self.max_len:
             cur_max_len = self.max_len
         time_interval = []
         training_data, output_label = [], []
@@ -55,4 +56,8 @@ class Dataset():
         training_tensor, label_tensor = torch.FloatTensor(training_data), torch.FloatTensor(output_label)
         if self.is_cuda_available:
             training_tensor, label_tensor = training_tensor.cuda(), label_tensor.cuda()
-        return (training_tensor, label_tensor)
+        seq_lens = torch.IntTensor(seq_lens)
+        sorted_seq_lens, sorted_index = torch.sort(seq_lens, descending=True)
+        training_pack = nn.utils.rnn.pack_padded_sequence(training_tensor[sorted_index], sorted_seq_lens, batch_first=True)
+        # label_pack = nn.utils.rnn.pack_padded_sequence(label_tensor[sorted_index], sorted_seq_lens, batch_first=True)
+        return (training_pack, label_tensor, seq_lens)
