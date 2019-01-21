@@ -27,6 +27,6 @@ class LSTMModel(nn.Module):
         lstm_out, lstm_hidden = self.lstm(seq)
         lstm_out = nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=True)[0]
         pred = self.output_layer(lstm_out)
-        pred = self.dropout(pred)
+        # pred = self.dropout(pred)
         pred = pred.squeeze()
         return pred
