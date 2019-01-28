@@ -45,6 +45,7 @@ import numpy as np
 # print(max_len)
 # print(avg_len/len(data))
 # print(time_interval)
+print('aaa')
 with open('cpu_change.json', 'r') as f:
     data = json.load(f)
 max_len, min_len = 0, 100000
