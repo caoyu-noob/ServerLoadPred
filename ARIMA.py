@@ -46,5 +46,57 @@ def fit_ARIMA():
     print('q is :' + str(init_q))
     print('d is :' + str(init_d))
 
+def predict(coef, history):
+	yhat = 0.0
+	for i in range(1, len(coef)+1):
+		yhat += coef[i-1] * history[-i]
+	return yhat
+
+def difference(dataset):
+	diff = []
+	for i in range(1, len(dataset)):
+		value = dataset[i] - dataset[i - 1]
+		diff.append(value)
+	return diff
+
+def test_ARIMA():
+    fited_model = ARIMAResults.load('ARIMA_best')
+    ar_coef, ma_coef = fited_model.arparams, fited_model.maparams
+    resid = fited_model.resid
+    ar_num, ma_num = ar_coef.size, ma_coef.size
+    with open('test_data.json', 'r') as f:
+        test_data = json.load(f)
+    rmse_sum, mae_sum, mape_sum = 0, 0, 0
+    skip_mape_count = 0
+    for data in tqdm(test_data):
+        history = []
+        label = []
+        pred = []
+        for index, d in enumerate(data['data']):
+            if index > ar_num:
+                label.append(d[1])
+                cur_resid = np.random.choice(resid, ma_num)
+                diff = difference(history)
+                yhat = history[-1] + predict(ar_coef, diff) + predict(ma_coef, cur_resid)
+                pred.append(yhat)
+            history.append(d[1])
+        label = np.array(label)
+        pred = np.array(pred)
+        rmse = np.sqrt(np.mean(np.square(label - pred)))
+        mae = np.mean(np.abs(label - pred))
+        mape_mask = label > 1
+        mape = np.sum(np.abs(label - pred) / (label + 0.001) * mape_mask)
+        mape_count = np.sum(mape_mask)
+        if mape_count != 0:
+            mape = mape / np.sum(mape_mask)
+            mape_sum += mape
+        else:
+            skip_mape_count += 1
+        rmse_sum += rmse
+        mae_sum += mae
+    print('RMSE is {:.3f}'.format(rmse_sum / len(test_data)))
+    print('MAE is {:.3f}'.format(mae_sum / len(test_data)))
+    print('MAPE is {:.5f}'.format(mape_sum / (len(test_data) - skip_mape_count)))
+
 if __name__ == '__main__':
-    fit_ARIMA()
+    test_ARIMA()

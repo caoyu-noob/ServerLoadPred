@@ -199,7 +199,7 @@ class DatasetWindow(Dataset):
                 net_out.append((d[index + 1][4] - d[index][4]) * 100)
             net_in = net_in[:-1]
             net_out = net_out[:-1]
-            label.extend([data[1] for data in d[8:]])
+            label.extend([data[1] for data in d[self.window_size:]])
             d = d[:-1]
             for i in range(self.window_size, len(d) + 1):
                 cur_d = d[i - self.window_size : i]

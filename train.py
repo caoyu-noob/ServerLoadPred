@@ -1,5 +1,5 @@
 from Dataset import Dataset, DatasetWindow
-from model import LSTMModel, GRUModel, EncoderDecoderModel
+from model import LSTMModel, GRUModel, EncoderDecoderModel, RNNDAModel
 from tqdm import tqdm
 from loss import MaskedMSELoss, MaskedRMSELoss, MaskedMAEAndMAPELoss
 
@@ -11,7 +11,7 @@ from torch.autograd import *
 import torch.optim as optim
 from ConfigLogger import config_logger
 
-model_dict = {'gru' : GRUModel, 'lstm' : LSTMModel, 'encoder' : EncoderDecoderModel}
+model_dict = {'gru' : GRUModel, 'lstm' : LSTMModel, 'encoder' : EncoderDecoderModel, 'rnnda' : RNNDAModel}
 
 class Config:
     def __init__(self, debug=False):
@@ -20,21 +20,21 @@ class Config:
         self.epoch_num = 10
         self.logger_interval = 1000
         self.validation_interval = 5000
-        self.hidden_dim = 32
-        self.learning_rate = 0.002
+        self.hidden_dim = 256
+        self.learning_rate = 0.001
         self.dropout_rate = 0
         self.is_cuda_available = torch.cuda.is_available()
         self.train_data_path = '../train_data'
         self.dev_data_path = 'dev_data.json'
         self.test_data_path = 'test_data.json'
         self.test_batch_size = 512
-        self.dynamic_lr = False
-        self.lr_change_epoch_interval = 5
+        self.dynamic_lr = True
+        self.lr_change_epoch_interval = 1
         self.optimizer_type = 'adam'
         self.use_net_accumulation = False
         self.use_window = True
         self.window_size = 8
-        self.model_type = 'gru'
+        self.model_type = 'rnnda'
         self.model_save_path = 'model/' + self.model_type + '_hidden_' + str(self.hidden_dim) + '/'
         if self.use_window:
             self.logger_interval = self.logger_interval * 6000
@@ -49,14 +49,15 @@ class Config:
             self.validation_interval = 1
         self.logger = config_logger(self.model_save_path)
 
-def adjust_learning_rate(config, optimizer, epoch):
+def adjust_learning_rate(config, optimizer, epoch, logger):
     if epoch != 0 and epoch % config.lr_change_epoch_interval == 0:
         lr = config.learning_rate * (0.5 ** (epoch / config.lr_change_epoch_interval))
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
+        logger.info('Change learning rate as %.5f', lr)
 
 def test(config):
-    test_data = Dataset(config.test_data_path, 1, config.max_len, config.is_cuda_available)
+    test_data = Dataset(config.test_data_path, 1, config.max_len, config.is_cuda_available, use_splitted_files=False)
     logger = config.logger
     model = model_dict[config.model_type](6, config.hidden_dim, config.dropout_rate, config.use_window)
     if config.is_cuda_available:
@@ -83,7 +84,10 @@ def train(config):
                 False, use_net_accumulation=config.use_net_accumulation)
     loss_function = MaskedMSELoss(config.is_cuda_available, config.use_window)
     logger = config.logger
-    model = model_dict[config.model_type](6, config.hidden_dim, config.dropout_rate, config.use_window)
+    if config.model_type != 'rnnda':
+        model = model_dict[config.model_type](6, config.hidden_dim, config.dropout_rate, config.use_window)
+    else:
+        model = model_dict[config.model_type](6, config.hidden_dim, config.window_size)
     optimizer_dict = {'sgd': optim.SGD, 'adam': optim.Adam}
     optim_func = optimizer_dict[config.optimizer_type]
     optimizer = optim_func(model.parameters(), lr=config.learning_rate)
@@ -103,6 +107,8 @@ def train(config):
         loss_sum = 0
         batch_count = 0
         dataset.new_epoch()
+        if config.dynamic_lr:
+            adjust_learning_rate(config, optimizer, epoch, logger)
         for d in tqdm(dataset.generate_batches()):
             model.train()
             train_seq = d[0]
@@ -138,7 +144,7 @@ def _log_information(logger, logger_count, logger_interval, loss_sum, batch_coun
 
 def _validation(config, logger, validation_count, dev_dataset, model, loss_function, rmse_loss_function,
             mae_loss_function, prev_best_loss, is_test=False):
-    if validation_count  >= config.validation_interval or is_test:
+    if validation_count >= config.validation_interval or is_test:
         logger.info('----------------------')
         logger.info('Start Validation Stage')
         model.eval()
