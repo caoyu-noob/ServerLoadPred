@@ -264,7 +264,7 @@ class Decoder(nn.Module):
                 # (batch_size, hidden_dim)
                 context = torch.bmm(beta.unsqueeze(1), H).squeeze(dim=1)
             else:
-                weights = torch.ones(self.hid_dim, self.window_size) / self.window_size
+                weights = torch.ones(H.shape[0], self.window_size) / self.window_size
                 if torch.cuda.is_available():
                     weights = weights.cuda()
                 context = torch.bmm(weights.unsqueeze(1), H).squeeze(dim=1)

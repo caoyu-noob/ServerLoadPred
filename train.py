@@ -20,7 +20,7 @@ class Config:
         self.epoch_num = 10
         self.logger_interval = 1000
         self.validation_interval = 5000
-        self.hidden_dim = 256
+        self.hidden_dim = 128
         self.learning_rate = 0.004
         self.dropout_rate = 0
         self.is_cuda_available = torch.cuda.is_available()
