@@ -116,6 +116,48 @@ class RNNDAModel(nn.Module):
         pred = self.decoder(encoder_output, prev_load)
         return pred
 
+class RNNDAModel_Att1(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, window_size):
+        super(RNNDAModel_Att1, self).__init__()
+        self.encoder = Encoder(window_size, input_dim, hidden_dim)
+        self.decoder = Decoder(window_size, input_dim, hidden_dim)
+
+    def forward(self, seq):
+        seq = nn.utils.rnn.pad_packed_sequence(seq, batch_first=True)[0]
+        encoder_output = self.encoder(seq, use_att=False)
+        prev_load = seq[:, :, 1]
+        pred = self.decoder(encoder_output, prev_load)
+        return pred
+
+class RNNDAModel_Att2(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, window_size):
+        super(RNNDAModel_Att2, self).__init__()
+        self.encoder = Encoder(window_size, input_dim, hidden_dim)
+        self.decoder = Decoder(window_size, input_dim, hidden_dim)
+
+    def forward(self, seq):
+        seq = nn.utils.rnn.pad_packed_sequence(seq, batch_first=True)[0]
+        encoder_output = self.encoder(seq)
+        prev_load = seq[:, :, 1]
+        pred = self.decoder(encoder_output, prev_load, use_att=False)
+        return pred
+
+class RNNDAModel_Att(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, window_size):
+        super(RNNDAModel_Att, self).__init__()
+        self.encoder = Encoder(window_size, input_dim, hidden_dim)
+        self.decoder = Decoder(window_size, input_dim, hidden_dim)
+
+    def forward(self, seq):
+        seq = nn.utils.rnn.pad_packed_sequence(seq, batch_first=True)[0]
+        encoder_output = self.encoder(seq, use_att=False)
+        prev_load = seq[:, :, 1]
+        pred = self.decoder(encoder_output, prev_load, use_att=False)
+        return pred
+
 class Encoder(nn.Module):
     """encoder in DARNN.
     All tensors are created by [Tensor].new_* , so new tensors
@@ -138,7 +180,7 @@ class Encoder(nn.Module):
             nn.Linear(2 * hid_dim + window_size, feat_dim), nn.Tanh(),
             nn.Linear(feat_dim, 1))
 
-    def forward(self, X):
+    def forward(self, X, use_att=True):
         encoder_out = X.new_zeros(X.shape[0], X.shape[1], self.hid_dim)
 
         # Eq. 8, parameters not in nn.Linear but to be learnt
@@ -154,18 +196,21 @@ class Encoder(nn.Module):
         for t in range(self.window_size):
             # (batch_size, feat_dim, (2*hidden_size + timesteps))
             # tensor.expand: do not copy data; -1 means no changes at that dim
-            x = torch.cat((h.expand(self.feat_dim, -1, -1).permute(1, 0, 2),
-                           s.expand(self.feat_dim, -1, -1).permute(1, 0, 2),
-                           X.permute(0, 2, 1)), dim=2)
-            # (batch_size, feat_dim, 1)
-            e = self.attn(x)
+            if use_att:
+                x = torch.cat((h.expand(self.feat_dim, -1, -1).permute(1, 0, 2),
+                               s.expand(self.feat_dim, -1, -1).permute(1, 0, 2),
+                               X.permute(0, 2, 1)), dim=2)
+                # (batch_size, feat_dim, 1)
+                e = self.attn(x)
 
-            # get weights by softmax
-            # (batch_size, feat_dim)
-            alpha = F.softmax(e.squeeze(dim=-1), dim=1)
+                # get weights by softmax
+                # (batch_size, feat_dim)
+                alpha = F.softmax(e.squeeze(dim=-1), dim=1)
 
-            # get new input for LSTM
-            x_tilde = torch.mul(alpha, X[:, t, :])
+                # get new input for LSTM
+                x_tilde = torch.mul(alpha, X[:, t, :])
+            else:
+                x_tilde = X[:, t, :]
 
             # encoder LSTM
             self.lstm.flatten_parameters()
@@ -202,21 +247,27 @@ class Decoder(nn.Module):
         self.fc = nn.Linear(hid_dim + 1, 1)
         self.fc_final = nn.Linear(2 * hid_dim, 1)
 
-    def forward(self, H, Y):
+    def forward(self, H, Y, use_att=True):
         """forward."""
         d_n = self._init_state(H)
         c_n = self._init_state(H)
         for t in range(self.window_size):
 
-            # (batch_size, window_size, 2*window_size + hidden_dim)
-            x = torch.cat((d_n.expand(self.window_size, -1, -1).permute(1, 0, 2),
-                           c_n.expand(self.window_size, -1, -1).permute(1, 0, 2), H), dim=2)
+            if use_att:
+                # (batch_size, window_size, 2*window_size + hidden_dim)
+                x = torch.cat((d_n.expand(self.window_size, -1, -1).permute(1, 0, 2),
+                               c_n.expand(self.window_size, -1, -1).permute(1, 0, 2), H), dim=2)
 
-            # (batch_size, window_size)
-            beta = F.softmax(self.attn(x).squeeze(dim=-1), dim=1)
-            # Eqn. 14: compute context vector
-            # (batch_size, hidden_dim)
-            context = torch.bmm(beta.unsqueeze(1), H).squeeze(dim=1)
+                # (batch_size, window_size)
+                beta = F.softmax(self.attn(x).squeeze(dim=-1), dim=1)
+                # Eqn. 14: compute context vector
+                # (batch_size, hidden_dim)
+                context = torch.bmm(beta.unsqueeze(1), H).squeeze(dim=1)
+            else:
+                weights = torch.ones(self.hid_dim, self.window_size) / self.window_size
+                if torch.cuda.is_available():
+                    weights = weights.cuda()
+                context = torch.bmm(weights.unsqueeze(1), H).squeeze(dim=1)
             # Eqn. 15
             # batch_size * 1
             y_tilde = self.fc(torch.cat((context, Y[:, t].unsqueeze(1)), dim=1))

@@ -2,7 +2,6 @@ import json
 import random
 import torch
 import torch.nn as nn
-import objgraph
 
 class Dataset():
     def __init__(self, json_name, batch_size, max_len, is_cuda_available, use_splitted_files, use_net_accumulation=True):

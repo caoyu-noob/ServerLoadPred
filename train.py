@@ -1,18 +1,17 @@
 from Dataset import Dataset, DatasetWindow
-from model import LSTMModel, GRUModel, EncoderDecoderModel, RNNDAModel
+from model import LSTMModel, GRUModel, EncoderDecoderModel, RNNDAModel, RNNDAModel_Att1, RNNDAModel_Att2, RNNDAModel_Att
 from tqdm import tqdm
 from loss import MaskedMSELoss, MaskedRMSELoss, MaskedMAEAndMAPELoss
 
 import argparse
 import os
-import objgraph
 import torch
 import torch.nn as nn
-from torch.autograd import *
 import torch.optim as optim
 from ConfigLogger import config_logger
 
-model_dict = {'gru' : GRUModel, 'lstm' : LSTMModel, 'encoder' : EncoderDecoderModel, 'rnnda' : RNNDAModel}
+model_dict = {'gru' : GRUModel, 'lstm' : LSTMModel, 'encoder' : EncoderDecoderModel, 'rnnda' : RNNDAModel,
+              'rnnda-att1':RNNDAModel_Att1, 'rnnda-att2':RNNDAModel_Att2, 'rnnda-att':RNNDAModel_Att}
 
 class Config:
     def __init__(self, debug=False):
@@ -21,7 +20,7 @@ class Config:
         self.epoch_num = 10
         self.logger_interval = 1000
         self.validation_interval = 5000
-        self.hidden_dim = 16
+        self.hidden_dim = 256
         self.learning_rate = 0.001
         self.dropout_rate = 0
         self.is_cuda_available = torch.cuda.is_available()
@@ -30,12 +29,12 @@ class Config:
         self.test_data_path = 'test_data.json'
         self.test_batch_size = 512
         self.dynamic_lr = True
-        self.lr_change_epoch_interval = 1
+        self.lr_change_batch_interval = 100000
         self.optimizer_type = 'adam'
         self.use_net_accumulation = False
         self.use_window = True
         self.window_size = 8
-        self.model_type = 'lstm'
+        self.model_type = 'rnnda-att'
         self.model_save_path = 'model/' + self.model_type + '_hidden_' + str(self.hidden_dim) + '/'
         if self.use_window:
             self.logger_interval = self.logger_interval * 6000
@@ -51,17 +50,19 @@ class Config:
             self.epoch_num = 1
         self.logger = config_logger(self.model_save_path)
 
-def adjust_learning_rate(config, optimizer, epoch, logger):
-    if epoch != 0 and epoch % config.lr_change_epoch_interval == 0:
-        lr = config.learning_rate * (0.5 ** (epoch / config.lr_change_epoch_interval))
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-        logger.info('Change learning rate as %.5f', lr)
+def adjust_learning_rate(config, optimizer, logger):
+    config.learning_rate = config.learning_rate * 0.8
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = config.learning_rate
+    logger.info('Change learning rate as %.5f', config.learning_rate)
 
 def test(config):
     test_data = Dataset(config.test_data_path, 1, config.max_len, config.is_cuda_available, use_splitted_files=False)
     logger = config.logger
-    model = model_dict[config.model_type](6, config.hidden_dim, config.dropout_rate, config.use_window)
+    if config.model_type == 'rnnda':
+        model = model_dict[config.model_type](6, config.hidden_dim, config.window_size)
+    else:
+        model = model_dict[config.model_type](6, config.hidden_dim, config.dropout_rate, config.use_window)
     if config.is_cuda_available:
         model = model.cuda()
     model.load_state_dict(torch.load(config.model_save_path + 'dev_best'))
@@ -88,7 +89,8 @@ def train(config):
                 False, use_net_accumulation=config.use_net_accumulation)
     loss_function = MaskedMSELoss(config.is_cuda_available, config.use_window)
     logger = config.logger
-    if config.model_type != 'rnnda':
+    if config.model_type != 'rnnda' and config.model_type != 'rnnda-att1' and config.model_type != 'rnnda-att2' \
+            and config.model_type != 'rnnda-att':
         model = model_dict[config.model_type](6, config.hidden_dim, config.dropout_rate, config.use_window)
     else:
         model = model_dict[config.model_type](6, config.hidden_dim, config.window_size)
@@ -105,17 +107,18 @@ def train(config):
     logger_interval = config.logger_interval
     prev_best_loss = 10000
     logger_count, validation_count = 0, 0
+    batch_count = 1
     for epoch in range(epoch_num):
         logger.info('===================')
         logger.info('Start Epoch %d', epoch)
         loss_sum = 0
-        batch_count = 0
         dataset.new_epoch()
-        if config.dynamic_lr:
-            adjust_learning_rate(config, optimizer, epoch, logger)
+
         # objgraph.show_growth()
         for d in tqdm(dataset.generate_batches()):
             # objgraph.show_growth()
+            if config.dynamic_lr and batch_count % config.lr_change_batch_interval == 0:
+                adjust_learning_rate(config, optimizer, logger)
             model.train()
             train_seq = d[0]
             label = d[1]
@@ -129,7 +132,7 @@ def train(config):
             validation_count += cur_batch_size
             # loss = nn.functional.mse_loss(pred, label)
             loss = loss_function(pred, label, mask, use_window=config.use_window)
-            loss.backward(retain_variables=True)
+            loss.backward()
             optimizer.step()
             loss_sum += loss.data.cpu().numpy()
             batch_count += 1
