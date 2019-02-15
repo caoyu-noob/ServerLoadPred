@@ -127,29 +127,18 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.hid_dim = hid_dim
         self.feat_dim = feat_dim
-        # todo: timesteps = T-1 in zhen code
         self.window_size = window_size
 
-        # Fig 1. Temporal Attention Mechanism: Encoder is LSTM
+        # LSTM to encoder the input features
         self.lstm = nn.LSTM(
             input_size=self.feat_dim, hidden_size=self.hid_dim, batch_first=True)
 
-        # Construct Input Attention Mechanism via deterministic attention model
-        # Eq. 8: W_e[h_{t-1}; s_{t-1}] + U_e * x^k
+        # Construct the input attention mechanism using a two-layer linear net
         self.attn = nn.Sequential(
             nn.Linear(2 * hid_dim + window_size, feat_dim), nn.Tanh(),
             nn.Linear(feat_dim, 1))
-        self.count = 0
 
     def forward(self, X):
-        """forward.
-
-            Args:
-                X: (batchsize, timesteps, feat_dim)
-
-            """
-        # Use zeros_like so encoder_out and X have same dtype, device and layout
-        # (batchsize, timesteps, hid_dim)
         encoder_out = X.new_zeros(X.shape[0], X.shape[1], self.hid_dim)
 
         # Eq. 8, parameters not in nn.Linear but to be learnt
@@ -167,17 +156,13 @@ class Encoder(nn.Module):
             # tensor.expand: do not copy data; -1 means no changes at that dim
             x = torch.cat((h.expand(self.feat_dim, -1, -1).permute(1, 0, 2),
                            s.expand(self.feat_dim, -1, -1).permute(1, 0, 2),
-                           X.permute(0, 2, 1)),
-                dim=2)
+                           X.permute(0, 2, 1)), dim=2)
             # (batch_size, feat_dim, 1)
             e = self.attn(x)
 
             # get weights by softmax
             # (batch_size, feat_dim)
             alpha = F.softmax(e.squeeze(dim=-1), dim=1)
-
-            # todo debug
-            self.count += 1
 
             # get new input for LSTM
             x_tilde = torch.mul(alpha, X[:, t, :])
@@ -215,14 +200,12 @@ class Decoder(nn.Module):
             nn.Linear(feat_dim, 1))
         self.lstm = nn.LSTM(input_size=1, hidden_size=hid_dim, batch_first=True)
         self.fc = nn.Linear(hid_dim + 1, 1)
-        self.fc_final = nn.Linear(2*hid_dim, 1)
-        self.count = 0
+        self.fc_final = nn.Linear(2 * hid_dim, 1)
 
     def forward(self, H, Y):
         """forward."""
         d_n = self._init_state(H)
         c_n = self._init_state(H)
-        self.count += 1
         for t in range(self.window_size):
 
             # (batch_size, window_size, 2*window_size + hidden_dim)

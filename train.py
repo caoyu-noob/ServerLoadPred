@@ -5,6 +5,7 @@ from loss import MaskedMSELoss, MaskedRMSELoss, MaskedMAEAndMAPELoss
 
 import argparse
 import os
+import objgraph
 import torch
 import torch.nn as nn
 from torch.autograd import *
@@ -20,7 +21,7 @@ class Config:
         self.epoch_num = 10
         self.logger_interval = 1000
         self.validation_interval = 5000
-        self.hidden_dim = 256
+        self.hidden_dim = 16
         self.learning_rate = 0.001
         self.dropout_rate = 0
         self.is_cuda_available = torch.cuda.is_available()
@@ -34,7 +35,7 @@ class Config:
         self.use_net_accumulation = False
         self.use_window = True
         self.window_size = 8
-        self.model_type = 'rnnda'
+        self.model_type = 'lstm'
         self.model_save_path = 'model/' + self.model_type + '_hidden_' + str(self.hidden_dim) + '/'
         if self.use_window:
             self.logger_interval = self.logger_interval * 6000
@@ -47,6 +48,7 @@ class Config:
         if debug:
             self.logger_interval = 1
             self.validation_interval = 1
+            self.epoch_num = 1
         self.logger = config_logger(self.model_save_path)
 
 def adjust_learning_rate(config, optimizer, epoch, logger):
@@ -77,6 +79,8 @@ def train(config):
             config.window_size, True, use_net_accumulation=config.use_net_accumulation)
         dev_dataset = Dataset(config.dev_data_path, 1, config.max_len, config.is_cuda_available, False,
             use_net_accumulation=config.use_net_accumulation)
+        # dataset = DatasetWindow(config.test_data_path, config.batch_size, config.max_len, config.is_cuda_available,
+        #     config.window_size, False, use_net_accumulation=config.use_net_accumulation)
     else:
         dataset = Dataset(config.train_data_path, config.batch_size, config.max_len, config.is_cuda_available,
                 True, use_net_accumulation=config.use_net_accumulation)
@@ -88,13 +92,13 @@ def train(config):
         model = model_dict[config.model_type](6, config.hidden_dim, config.dropout_rate, config.use_window)
     else:
         model = model_dict[config.model_type](6, config.hidden_dim, config.window_size)
-    optimizer_dict = {'sgd': optim.SGD, 'adam': optim.Adam}
-    optim_func = optimizer_dict[config.optimizer_type]
-    optimizer = optim_func(model.parameters(), lr=config.learning_rate)
     if config.continue_train:
         model.load_state_dict(torch.load(config.model_save_path + '/' + config.prev_model_name))
     if config.is_cuda_available:
         model = model.cuda()
+    optimizer_dict = {'sgd': optim.SGD, 'adam': optim.Adam}
+    optim_func = optimizer_dict[config.optimizer_type]
+    optimizer = optim_func(model.parameters(), lr=config.learning_rate)
     eval_rmse_loss_function = MaskedRMSELoss(config.is_cuda_available, use_window=True)
     eval_mae_loss_function = MaskedMAEAndMAPELoss(config.is_cuda_available, use_window=True)
     epoch_num = config.epoch_num
@@ -109,7 +113,9 @@ def train(config):
         dataset.new_epoch()
         if config.dynamic_lr:
             adjust_learning_rate(config, optimizer, epoch, logger)
+        # objgraph.show_growth()
         for d in tqdm(dataset.generate_batches()):
+            # objgraph.show_growth()
             model.train()
             train_seq = d[0]
             label = d[1]
@@ -121,8 +127,9 @@ def train(config):
             cur_batch_size = train_seq.batch_sizes[0].item()
             logger_count += cur_batch_size
             validation_count += cur_batch_size
+            # loss = nn.functional.mse_loss(pred, label)
             loss = loss_function(pred, label, mask, use_window=config.use_window)
-            loss.backward()
+            loss.backward(retain_variables=True)
             optimizer.step()
             loss_sum += loss.data.cpu().numpy()
             batch_count += 1
@@ -154,7 +161,6 @@ def _validation(config, logger, validation_count, dev_dataset, model, loss_funct
         current_mae_loss = 0
         current_mape_loss =0
         sample_count = 0
-        sample_mape_count = 0
         use_pack = not config.use_window
         for d in tqdm(dev_dataset.generate_batches(use_pack=use_pack)):
             dev_seq, label, mask = d[0], d[1], d[2]

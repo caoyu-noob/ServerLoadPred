@@ -2,6 +2,7 @@ import json
 import random
 import torch
 import torch.nn as nn
+import objgraph
 
 class Dataset():
     def __init__(self, json_name, batch_size, max_len, is_cuda_available, use_splitted_files, use_net_accumulation=True):
@@ -21,12 +22,12 @@ class Dataset():
         self.max_len = max_len
         self.is_cuda_available = is_cuda_available
         self.use_net_accumulation = use_net_accumulation
+        self.idxs = list(range(self.data_size))
 
     def new_epoch(self):
         self.is_new_epoch = True
-        idxs = list(range(self.data_size))
-        random.shuffle(idxs)
-        self.batch_idxs = [idxs[i:i+self.batch_size] if i + self.batch_size <= self.data_size else idxs[i:]
+        random.shuffle(self.idxs)
+        self.batch_idxs = [self.idxs[i:i+self.batch_size] if i + self.batch_size <= self.data_size else self.idxs[i:]
                       for i in range(0, self.data_size, self.batch_size)]
 
     def generate_batches(self, use_pack=True):
@@ -92,11 +93,10 @@ class DatasetWindow(Dataset):
         return tmp_data['data']
 
     def new_epoch(self):
-        idxs = list(range(self.data_size))
-        random.shuffle(idxs)
+        random.shuffle(self.idxs)
         idxs_sample_idx = []
         if not self.use_splitted_files:
-            for idx in idxs:
+            for idx in self.idxs:
                 idxs_sample_idx.extend([(idx, idx_in_sample) for idx_in_sample in
                         range(self.window_size, len(self.data[idx]))])
             self.batch_idxs_sample_idxs = [
@@ -115,19 +115,19 @@ class DatasetWindow(Dataset):
                 remain_batch_size = self.batch_size
                 sample_idx_in_cur_batch = []
                 while sample_index < self.data_size and \
-                        self.data_lens[idxs[sample_index]] - index_in_cur_sample <= remain_batch_size:
-                    sample_idx_in_cur_batch.append(idxs[sample_index])
-                    remain_batch_size -= (self.data_lens[idxs[sample_index]] - index_in_cur_sample)
+                        self.data_lens[self.idxs[sample_index]] - index_in_cur_sample <= remain_batch_size:
+                    sample_idx_in_cur_batch.append(self.idxs[sample_index])
+                    remain_batch_size -= (self.data_lens[self.idxs[sample_index]] - index_in_cur_sample)
                     index_in_cur_sample = self.window_size
                     sample_index += 1
                 if sample_index < self.data_size and remain_batch_size != 0:
-                    sample_idx_in_cur_batch.append(idxs[sample_index])
+                    sample_idx_in_cur_batch.append(self.idxs[sample_index])
                     index_in_cur_sample += remain_batch_size
                 self.batch_idxs_sample_idxs.append(sample_idx_in_cur_batch)
         idxs_sample_idx = []
         if self.use_splitted_files:
-            self.current_sample_idx = idxs[0]
-            self.current_sample_data = self.load_splitted_sample(idxs[0])
+            self.current_sample_idx = self.idxs[0]
+            self.current_sample_data = self.load_splitted_sample(self.idxs[0])
         self.current_idx_in_a_sample = self.window_size
         self.epoch_finish = False
 
@@ -169,12 +169,12 @@ class DatasetWindow(Dataset):
                                          enumerate(d)]
             training_data.append(current_training_data)
             self.current_idx_in_a_sample += 1
-        training_tensor, label_tensor = torch.FloatTensor(training_data), torch.FloatTensor(label)
+        training_data, label = torch.FloatTensor(training_data), torch.FloatTensor(label)
         if self.is_cuda_available:
-            training_tensor, label_tensor = training_tensor.cuda(), label_tensor.cuda()
-        seq_lens = torch.IntTensor([self.window_size] * training_tensor.shape[0])
-        training_pack = nn.utils.rnn.pack_padded_sequence(training_tensor, seq_lens, batch_first=True)
-        return (training_pack, label_tensor.unsqueeze(1), seq_lens)
+            training_data, label_tensor = training_data.cuda(), label.cuda()
+        seq_lens = torch.IntTensor([self.window_size] * training_data.shape[0])
+        training_data = nn.utils.rnn.pack_padded_sequence(training_data, seq_lens, batch_first=True)
+        return (training_data, label_tensor.unsqueeze(1), seq_lens)
 
     def prepro_data_for_batch_on_sample_idx(self, batch_sample_idx):
         training_data = []
@@ -209,14 +209,16 @@ class DatasetWindow(Dataset):
                 else:
                     training_data.append([single_data[1:] + [time_interval[index]] for index, single_data in
                              enumerate(cur_d)])
-        training_tensor, label_tensor = torch.FloatTensor(training_data), torch.FloatTensor(label)
+        del cur_d, d, net_in, net_out, time_interval
+        training_data, label = torch.FloatTensor(training_data), torch.FloatTensor(label)
         if self.is_cuda_available:
-            training_tensor, label_tensor = training_tensor.cuda(), label_tensor.cuda()
-        seq_lens = torch.IntTensor([self.window_size] * training_tensor.shape[0])
+            training_data, label = training_data.cuda(), label.cuda()
+        seq_lens = torch.IntTensor([self.window_size] * training_data.shape[0])
+        label = label.unsqueeze(1)
         try:
-            training_pack = nn.utils.rnn.pack_padded_sequence(training_tensor, seq_lens, batch_first=True)
+            training_data = nn.utils.rnn.pack_padded_sequence(training_data, seq_lens, batch_first=True)
         except:
-            print(training_tensor.shape[0])
+            print(training_data.shape[0])
             return (None, None, None)
-        return (training_pack, label_tensor.unsqueeze(1), seq_lens)
+        return (training_data, label, seq_lens)
 
