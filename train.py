@@ -21,7 +21,7 @@ class Config:
         self.logger_interval = 1000
         self.validation_interval = 5000
         self.hidden_dim = 256
-        self.learning_rate = 0.001
+        self.learning_rate = 0.004
         self.dropout_rate = 0
         self.is_cuda_available = torch.cuda.is_available()
         self.train_data_path = '../train_data'
